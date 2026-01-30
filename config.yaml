@@ -20,20 +20,20 @@
 tasks:
   # 示例任务 1
   - name: "sft_training_task1"
-    work_dir: "/path/to/project"
+    work_dir: "/home/jiayong.wan/llmparty"
     docker_script: "docker/training/docker_run.sh"
     container_work_dir: "training"
     train_command: "bash run_verl.sh --yaml sft.yaml"
-    gpu_count: 4
+    gpu_count: 3
     completion_file: "/path/to/output/checkpoint/final.pt"
+    retry: true
 
   # 示例任务 2
   - name: "sft_training_task2"
-    work_dir: "/path/to/another/project"
+    work_dir: "/home/jiayong.wan/llmparty"
     docker_script: "docker/training/docker_run.sh"
     container_work_dir: "training"
     train_command: "bash run_verl.sh --yaml sft2.yaml"
     gpu_count: 4
     completion_file: "/path/to/output2/checkpoint/final.pt"
 
-  # 可以继续添加更多任务...

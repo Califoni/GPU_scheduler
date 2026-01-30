@@ -1,1 +1,17 @@
-[]
+[
+  {
+    "name": "sft_training_task2",
+    "work_dir": "/home/jiayong.wan/llmparty",
+    "docker_script": "docker/training/docker_run.sh",
+    "container_work_dir": "training",
+    "train_command": "bash run_verl.sh --yaml sft2.yaml",
+    "gpu_count": 4,
+    "completion_file": "/path/to/output2/checkpoint/final.pt",
+    "assigned_gpus": null,
+    "pid": null,
+    "start_time": null,
+    "end_time": null,
+    "config_hash": "c1562dd5",
+    "retry_count": 0
+  }
+]

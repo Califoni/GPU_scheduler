@@ -30,7 +30,7 @@ COMPLETED_FILE = POOLS_DIR / "completed.json"
 FAILED_FILE = POOLS_DIR / "failed.json"
 
 # 调度间隔（秒）
-SCHEDULE_INTERVAL = 300  # 5 分钟
+SCHEDULE_INTERVAL = 150  
 
 # GPU 空闲判断阈值（MB）
 GPU_FREE_THRESHOLD_MB = 100
@@ -403,8 +403,8 @@ def start_task(task: Task, gpus: List[int]) -> Optional[int]:
     docker_script_path = os.path.join(task.work_dir, task.docker_script)
 
     # 构建容器内执行的命令
-    container_command = f"cd {task.container_work_dir} && {task.train_command}"
-
+    container_command = f"{task.train_command}"
+    print(docker_script_path,container_command)
     # 设置环境变量
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = gpu_str
@@ -416,8 +416,8 @@ def start_task(task: Task, gpus: List[int]) -> Optional[int]:
             ["bash", docker_script_path, container_command],
             env=env,
             cwd=task.work_dir,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            # stdout=subprocess.DEVNULL,
+            # stderr=subprocess.DEVNULL,
             start_new_session=True  # 使进程在后台独立运行
         )
 
