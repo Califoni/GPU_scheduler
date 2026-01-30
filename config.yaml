@@ -8,6 +8,14 @@
 #   train_command: 训练命令
 #   gpu_count: 需要的 GPU 数量
 #   completion_file: 完成标志文件路径（宿主机路径）
+#
+# 可选控制字段：
+#   enabled: 是否启用任务（默认 true），设为 false 时任务从 pending 池移除
+#   retry: 是否重试失败任务（默认 false），设为 true 时将 failed 池中的任务移回 pending
+#   force_rerun: 是否强制重新运行（默认 false），设为 true 时将 completed 池中的任务移回 pending
+#
+# 注意：修改任务的核心配置（work_dir, docker_script, container_work_dir, train_command,
+#       gpu_count, completion_file）后，pending 池中的任务会自动更新配置
 
 tasks:
   # 示例任务 1

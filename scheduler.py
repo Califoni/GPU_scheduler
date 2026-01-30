@@ -4,6 +4,7 @@ GPU Training Task Scheduler
 自动检测 GPU 占用情况并调度训练任务
 """
 
+import hashlib
 import json
 import logging
 import os
@@ -50,12 +51,18 @@ class Task:
     pid: Optional[int] = None
     start_time: Optional[str] = None
     end_time: Optional[str] = None
+    # 配置追踪
+    config_hash: Optional[str] = None
+    retry_count: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'Task':
+        # 处理旧数据兼容性
+        data.setdefault('config_hash', None)
+        data.setdefault('retry_count', 0)
         return cls(**data)
 
 
@@ -185,6 +192,44 @@ def save_pool(pool_file: Path, tasks: List[Task]) -> None:
         logger.error(f"保存任务池 {pool_file} 失败: {e}")
 
 
+
+def compute_config_hash(task_config: Dict[str, Any]) -> str:
+    """计算任务配置的哈希值，用于检测配置变更"""
+    core_fields = ['work_dir', 'docker_script', 'container_work_dir',
+                   'train_command', 'gpu_count', 'completion_file']
+    hash_content = {k: task_config.get(k) for k in core_fields}
+    return hashlib.md5(json.dumps(hash_content, sort_keys=True).encode()).hexdigest()[:8]
+
+
+def load_config_tasks_raw() -> List[Dict[str, Any]]:
+    """从配置文件加载任务（保留原始字典格式）"""
+    if not CONFIG_FILE.exists():
+        logger.warning(f"配置文件 {CONFIG_FILE} 不存在")
+        return []
+
+    try:
+        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+            config = yaml.safe_load(f)
+        return config.get("tasks", [])
+    except Exception as e:
+        logger.error(f"加载配置文件失败: {e}")
+        return []
+
+
+def create_task_from_config(task_config: Dict[str, Any], config_hash: str) -> Task:
+    """从配置字典创建 Task 对象"""
+    return Task(
+        name=task_config["name"],
+        work_dir=task_config["work_dir"],
+        docker_script=task_config["docker_script"],
+        container_work_dir=task_config["container_work_dir"],
+        train_command=task_config["train_command"],
+        gpu_count=task_config["gpu_count"],
+        completion_file=task_config["completion_file"],
+        config_hash=config_hash
+    )
+
+
 def load_config_tasks() -> List[Task]:
     """从配置文件加载任务"""
     if not CONFIG_FILE.exists():
@@ -217,30 +262,132 @@ def load_config_tasks() -> List[Task]:
 def sync_pending_pool() -> None:
     """
     同步 pending 池与配置文件
+    - 更新pending池中配置已变更的任务
+    - 处理retry标志：将failed任务移回pending
+    - 处理force_rerun标志：将completed任务移回pending
+    - 处理enabled标志：禁用任务从pending移除
+    - 移除配置文件中已删除的任务
     - 添加配置中新增的任务
-    - 不移除已在其他池中的任务
     """
-    config_tasks = load_config_tasks()
+    config_tasks_raw = load_config_tasks_raw()
     pending_tasks = load_pool(PENDING_FILE)
     running_tasks = load_pool(RUNNING_FILE)
     completed_tasks = load_pool(COMPLETED_FILE)
     failed_tasks = load_pool(FAILED_FILE)
 
-    # 获取所有已存在的任务名
-    existing_names = set(
-        [t.name for t in pending_tasks] +
-        [t.name for t in running_tasks] +
-        [t.name for t in completed_tasks] +
-        [t.name for t in failed_tasks]
-    )
+    # 构建配置任务的映射 {name: (config_dict, hash)}
+    config_map: Dict[str, tuple] = {}
+    for task_config in config_tasks_raw:
+        name = task_config.get("name")
+        if name:
+            config_hash = compute_config_hash(task_config)
+            config_map[name] = (task_config, config_hash)
 
-    # 添加新任务到 pending 池
-    new_tasks = [t for t in config_tasks if t.name not in existing_names]
-    if new_tasks:
-        pending_tasks.extend(new_tasks)
+    # 构建各池的任务名集合
+    pending_names = {t.name for t in pending_tasks}
+    running_names = {t.name for t in running_tasks}
+    completed_names = {t.name for t in completed_tasks}
+    failed_names = {t.name for t in failed_tasks}
+
+    pending_modified = False
+    completed_modified = False
+    failed_modified = False
+
+    # 1. 更新pending池中配置已变更的任务
+    new_pending_tasks = []
+    for task in pending_tasks:
+        if task.name not in config_map:
+            # 配置中已删除的任务，从pending移除
+            logger.info(f"任务 {task.name} 已从配置中删除，从 pending 池移除")
+            pending_modified = True
+            continue
+
+        task_config, config_hash = config_map[task.name]
+        enabled = task_config.get("enabled", True)
+
+        if not enabled:
+            # 禁用的任务从pending移除
+            logger.info(f"任务 {task.name} 已禁用，从 pending 池移除")
+            pending_modified = True
+            continue
+
+        # 检查配置是否变更
+        if task.config_hash != config_hash:
+            # 配置已变更，更新任务
+            updated_task = create_task_from_config(task_config, config_hash)
+            updated_task.retry_count = task.retry_count
+            new_pending_tasks.append(updated_task)
+            logger.info(f"任务 {task.name} 配置已更新 (hash: {task.config_hash} -> {config_hash})")
+            pending_modified = True
+        else:
+            new_pending_tasks.append(task)
+
+    pending_tasks = new_pending_tasks
+
+    # 2. 处理retry标志：将failed任务移回pending
+    new_failed_tasks = []
+    for task in failed_tasks:
+        if task.name not in config_map:
+            new_failed_tasks.append(task)
+            continue
+
+        task_config, config_hash = config_map[task.name]
+        retry = task_config.get("retry", False)
+
+        if retry:
+            # 重置任务状态并移回pending
+            retried_task = create_task_from_config(task_config, config_hash)
+            retried_task.retry_count = task.retry_count + 1
+            pending_tasks.append(retried_task)
+            logger.info(f"任务 {task.name} 设置了 retry=true，从 failed 池移回 pending 池 (重试次数: {retried_task.retry_count})")
+            pending_modified = True
+            failed_modified = True
+        else:
+            new_failed_tasks.append(task)
+
+    failed_tasks = new_failed_tasks
+
+    # 3. 处理force_rerun标志：将completed任务移回pending
+    new_completed_tasks = []
+    for task in completed_tasks:
+        if task.name not in config_map:
+            new_completed_tasks.append(task)
+            continue
+
+        task_config, config_hash = config_map[task.name]
+        force_rerun = task_config.get("force_rerun", False)
+
+        if force_rerun:
+            # 重置任务状态并移回pending
+            rerun_task = create_task_from_config(task_config, config_hash)
+            rerun_task.retry_count = task.retry_count
+            pending_tasks.append(rerun_task)
+            logger.info(f"任务 {task.name} 设置了 force_rerun=true，从 completed 池移回 pending 池")
+            pending_modified = True
+            completed_modified = True
+        else:
+            new_completed_tasks.append(task)
+
+    completed_tasks = new_completed_tasks
+
+    # 4. 添加新任务到pending池
+    existing_names = pending_names | running_names | completed_names | failed_names
+    for name, (task_config, config_hash) in config_map.items():
+        if name not in existing_names:
+            enabled = task_config.get("enabled", True)
+            if enabled:
+                new_task = create_task_from_config(task_config, config_hash)
+                pending_tasks.append(new_task)
+                logger.info(f"新任务添加到 pending 池: {name}")
+                pending_modified = True
+
+    # 保存修改后的池
+    if pending_modified:
         save_pool(PENDING_FILE, pending_tasks)
-        for task in new_tasks:
-            logger.info(f"新任务添加到 pending 池: {task.name}")
+    if failed_modified:
+        save_pool(FAILED_FILE, failed_tasks)
+    if completed_modified:
+        save_pool(COMPLETED_FILE, completed_tasks)
 
 
 # ============== 任务执行模块 ==============
