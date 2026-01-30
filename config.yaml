@@ -1,0 +1,31 @@
+# GPU 训练任务调度器配置文件
+#
+# 任务配置说明：
+#   name: 任务名称（唯一标识）
+#   work_dir: 项目目录（宿主机路径）
+#   docker_script: Docker 启动脚本（相对于 work_dir）
+#   container_work_dir: 容器内工作目录
+#   train_command: 训练命令
+#   gpu_count: 需要的 GPU 数量
+#   completion_file: 完成标志文件路径（宿主机路径）
+
+tasks:
+  # 示例任务 1
+  - name: "sft_training_task1"
+    work_dir: "/path/to/project"
+    docker_script: "docker/training/docker_run.sh"
+    container_work_dir: "training"
+    train_command: "bash run_verl.sh --yaml sft.yaml"
+    gpu_count: 4
+    completion_file: "/path/to/output/checkpoint/final.pt"
+
+  # 示例任务 2
+  - name: "sft_training_task2"
+    work_dir: "/path/to/another/project"
+    docker_script: "docker/training/docker_run.sh"
+    container_work_dir: "training"
+    train_command: "bash run_verl.sh --yaml sft2.yaml"
+    gpu_count: 4
+    completion_file: "/path/to/output2/checkpoint/final.pt"
+
+  # 可以继续添加更多任务...
