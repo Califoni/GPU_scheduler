@@ -46,6 +46,7 @@ class Task:
     train_command: str
     gpu_count: int
     completion_file: str
+    image: Optional[str] = None  # Docker 镜像名称（可选）
     # 运行时信息
     assigned_gpus: Optional[List[int]] = None
     pid: Optional[int] = None
@@ -63,6 +64,7 @@ class Task:
         # 处理旧数据兼容性
         data.setdefault('config_hash', None)
         data.setdefault('retry_count', 0)
+        data.setdefault('image', None)
         return cls(**data)
 
 
@@ -196,7 +198,7 @@ def save_pool(pool_file: Path, tasks: List[Task]) -> None:
 def compute_config_hash(task_config: Dict[str, Any]) -> str:
     """计算任务配置的哈希值，用于检测配置变更"""
     core_fields = ['work_dir', 'docker_script', 'container_work_dir',
-                   'train_command', 'gpu_count', 'completion_file']
+                   'train_command', 'gpu_count', 'completion_file', 'image']
     hash_content = {k: task_config.get(k) for k in core_fields}
     return hashlib.md5(json.dumps(hash_content, sort_keys=True).encode()).hexdigest()[:8]
 
@@ -226,6 +228,7 @@ def create_task_from_config(task_config: Dict[str, Any], config_hash: str) -> Ta
         train_command=task_config["train_command"],
         gpu_count=task_config["gpu_count"],
         completion_file=task_config["completion_file"],
+        image=task_config.get("image"),  # 可选字段
         config_hash=config_hash
     )
 
@@ -404,16 +407,26 @@ def start_task(task: Task, gpus: List[int]) -> Optional[int]:
 
     # 构建容器内执行的命令
     container_command = f"{task.train_command}"
-    print(docker_script_path,container_command)
+    print(docker_script_path, container_command)
+
     # 设置环境变量
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = gpu_str
 
     try:
+        # 构建命令行参数
+        cmd = ["bash", docker_script_path]
+
+        # 如果指定了镜像，添加 --image 参数
+        if task.image:
+            cmd.extend(["--image", task.image])
+
+        # 添加训练命令
+        cmd.append(container_command)
+
         # 启动 Docker 并执行训练命令
-        # 假设 docker_run.sh 接受命令作为参数
         process = subprocess.Popen(
-            ["bash", docker_script_path, container_command],
+            cmd,
             env=env,
             cwd=task.work_dir,
             # stdout=subprocess.DEVNULL,
@@ -421,7 +434,7 @@ def start_task(task: Task, gpus: List[int]) -> Optional[int]:
             start_new_session=True  # 使进程在后台独立运行
         )
 
-        logger.info(f"任务 {task.name} 已启动, PID: {process.pid}, GPUs: {gpu_str}")
+        logger.info(f"任务 {task.name} 已启动, PID: {process.pid}, GPUs: {gpu_str}, Image: {task.image or 'default'}")
         return process.pid
 
     except Exception as e:

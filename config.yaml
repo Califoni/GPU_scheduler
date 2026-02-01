@@ -8,6 +8,7 @@
 #   train_command: 训练命令
 #   gpu_count: 需要的 GPU 数量
 #   completion_file: 完成标志文件路径（宿主机路径）
+#   image: Docker 镜像名称（可选，默认使用 docker_script 中的默认镜像）
 #
 # 可选控制字段：
 #   enabled: 是否启用任务（默认 true），设为 false 时任务从 pending 池移除
@@ -15,7 +16,7 @@
 #   force_rerun: 是否强制重新运行（默认 false），设为 true 时将 completed 池中的任务移回 pending
 #
 # 注意：修改任务的核心配置（work_dir, docker_script, container_work_dir, train_command,
-#       gpu_count, completion_file）后，pending 池中的任务会自动更新配置
+#       gpu_count, completion_file, image）后，pending 池中的任务会自动更新配置
 
 tasks:
   # 示例任务 1
@@ -26,6 +27,7 @@ tasks:
     train_command: "bash run_verl.sh --yaml sft.yaml"
     gpu_count: 3
     completion_file: "/path/to/output/checkpoint/final.pt"
+    image: "llmparty"  # 可选，指定 Docker 镜像
     retry: true
 
   # 示例任务 2
@@ -36,4 +38,5 @@ tasks:
     train_command: "bash run_verl.sh --yaml sft2.yaml"
     gpu_count: 4
     completion_file: "/path/to/output2/checkpoint/final.pt"
+    # image: "other_image"  # 不指定则使用 docker_script 中的默认镜像
 
